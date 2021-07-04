@@ -279,6 +279,7 @@ int main() {
    glBindBuffer(GL_ARRAY_BUFFER, VBO);
     //通过ID（此刻存储在变量VBO中），让对应的缓冲对象都绑定上对应的缓冲类型
     //GL_ARRAY_BUFFER是顶点缓冲对象的缓冲类型，同一时间，一个缓冲类型只能绑定一个缓冲对象，不然缓冲区在接收数据后，会不知道把数据传给哪个缓冲对象
+    //如果不太明白工作原理，可以想象一个流水素面，竹子的出口只能对着一个碗，对准之后，所有放入竹子的面都会流入这个碗中
     //我们可以有很多的VBO，只要他们绑定的是不同的缓冲类型（即不同的顶点信息）
     //绑定完成后，任何传送给GL_ARRAY_BUFFER缓冲的数据都会被用于配置VBO（可以理解为转发到VBO里）
     
@@ -424,9 +425,613 @@ glUseProgram(shaderProgram);
 glBindVertexArray(VAO);
 glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 //我们要绘制6个顶点，索引的类型是GL_UNSIGNED_INT，EBO中偏移量为0
+//这个偏移量的单位为字节，假设要从第三个index开始绘制，那么这里应该写作(GLvoid*)(3*sizeof(GLuint))
 glBindVertexArray(0);
 ```
 
 包含EBO的VAO（图示）：
 
 ![img](https://learnopengl-cn.readthedocs.io/zh/latest/img/01/04/vertex_array_objects_ebo.png)
+
+## 着色器
+
+着色器是运行在GPU上的小程序，它们服务于管线的某些特定部分。
+
+着色器由GLSL写成，这种语言包含一些针对向量和矩阵的操作。
+
+```glsl
+#version version_number
+//GLSL的开头总是要声明版本
+
+in type in_variable_name;
+in type in_variable_name;
+//声明输入变量（顶点属性），正如前文所说，顶点属性的数量是有上限的，一般来说为16个包含4个分量的属性
+
+out type out_variable_name;
+//声明输出变量
+
+uniform type uniform_name;
+//uniform关键字用于声明全局变量，这种变量在着色器程序中必须是独一无二的
+//uniform变量可以在同一个着色器程序的不同着色器中共享使用，但想要共享使用，需要在每个着色器中用同样的方法声明同样的变量
+//对于着色器来说，uniform变量是只读的，uniform变量的设置只有两种方法：1.初始化的时候设置 2.CPU端设置，也就是通过OpenGL函数设置
+
+int main()
+{
+  //main函数是程序唯一入口
+  out_variable_name = weird_stuff_we_processed;
+}
+```
+
+GLSL中的数据类型有：
+
+* 基本数据类型：`int`，`float`，`double`，`uint`，`bool`。
+
+* 容器类型：向量，矩阵
+
+  | 类型    | 含义                    |
+  | ------- | ----------------------- |
+  | `vecn`  | 包含n个float分量的向量  |
+  | `bvecn` | 包含n个bool分量的向量   |
+  | `ivecn` | 包含n个int分量的向量    |
+  | `uvecn` | 包含n个uint分量的向量   |
+  | `dvecn` | 包含n个double分量的向量 |
+
+  获取向量的分量，可以通过`xyzw`，`rgba`，`stpq`，也可以随机组合这些字母，组成新的向量，这种操作称为**重组**（Swizzling）。
+
+```c++
+#include <GL/glew.h>
+#include <stdio.h>
+#include <GLFW/glfw3.h>
+#include <math.h>
+
+const GLuint WIDTH = 800, HEIGHT = 600;
+
+void key_callback(GLFWwindow *window, int key, int scancode, int action, int mode);
+
+//下面的两个着色器代码中我们都声明了uniform变量ourColor，虽然顶点着色器我们没有用到这个变量，但他们是共享的
+const char *vertexShaderSource = "#version 330 core\n"
+                                "layout (location = 0) in vec3 position;\n"
+                                "uniform vec4 ourColor;\n"
+                                "void main()\n"
+                                "{\n"
+                                "   gl_Position = vec4(position.x, position.y, position.z, 1.0);\n"
+                                "}\0";
+
+const char *fragmentShaderSource = "#version 330 core\n"
+                                  "out vec4 FragColor;\n"
+                                  "uniform vec4 ourColor;\n"
+                                  "void main()\n"
+                                  "{\n"
+                                  "   FragColor = ourColor;\n"
+                                  "}\n\0";
+
+
+int main() {
+   glfwInit();
+   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+   glfwWindowHint(GLFW_RESIZABLE, GL_FALSE);
+
+   GLFWwindow *window = glfwCreateWindow(WIDTH, HEIGHT, "LearnOpenGL", nullptr, nullptr);
+   glfwMakeContextCurrent(window);
+   glfwSetKeyCallback(window, key_callback);
+
+   glewExperimental = GL_TRUE;
+   glewInit();
+
+   int width, height;
+   glfwGetFramebufferSize(window, &width, &height);
+   glViewport(0, 0, width, height);
+
+   GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
+   glShaderSource(vertexShader, 1, &vertexShaderSource, NULL);
+   glCompileShader(vertexShader);
+
+   GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
+   glShaderSource(fragmentShader, 1, &fragmentShaderSource, NULL);
+   glCompileShader(fragmentShader);
+
+   GLuint shaderProgram = glCreateProgram();
+   glAttachShader(shaderProgram, vertexShader);
+   glAttachShader(shaderProgram, fragmentShader);
+   glLinkProgram(shaderProgram);
+
+   glDeleteShader(vertexShader);
+   glDeleteShader(fragmentShader);
+
+   GLfloat vertices[] = {
+           0.5f,  0.5f, 0.0f,  // Top Right
+           0.5f, -0.5f, 0.0f,  // Bottom Right
+           -0.5f, -0.5f, 0.0f,  // Bottom Left
+           -0.5f,  0.5f, 0.0f   // Top Left
+   };
+
+   GLuint indices[] = {
+           0, 1, 3,
+           1, 2, 3
+   };
+
+   GLuint VBO, VAO, EBO;
+
+   glGenBuffers(1, &VBO);
+   glGenBuffers(1, &EBO);
+   glGenVertexArrays(1, &VAO);
+
+   glBindVertexArray(VAO);
+   glBindBuffer(GL_ARRAY_BUFFER, VBO);
+   glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
+
+   glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+   glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+
+   glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(GLfloat), (GLvoid*) 0);
+   glEnableVertexAttribArray(0);
+
+   glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+   glBindVertexArray(0);
+
+   //glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+
+   while (!glfwWindowShouldClose(window)){
+       glfwPollEvents();
+       glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
+       glClear(GL_COLOR_BUFFER_BIT);
+
+
+       glUseProgram(shaderProgram);
+       GLfloat timeValue = glfwGetTime();
+       //获取时间
+       GLfloat greenValue = (sin(timeValue)/2)+0.5;
+       GLint vertexColorLocation = glGetUniformLocation(shaderProgram, "ourColor");
+       //在shaderProgram这个着色器程序中查找ourColor这个变量的索引值，后续我们需要通过这个索引值来更改这个变量的具体值，如果返回-1就代表没有找到这个变量
+       glUniform4f(vertexColorLocation, 0.0f, greenValue, 0.0f, 1.0f);
+       //因为ourColor是一个四浮点分量的向量，所以我们通过对应函数去设置它的值
+       //在查询之前，必须先激活程序
+       glBindVertexArray(VAO);
+       glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_INT, (GLvoid*)0);
+       glBindVertexArray(0);
+
+       glfwSwapBuffers(window);
+   }
+   glDeleteVertexArrays(1, &VAO);
+   glDeleteBuffers(1, &VBO);
+   glDeleteBuffers(1, &EBO);
+
+   glfwTerminate();
+   return 0;
+}
+
+void key_callback(GLFWwindow *window, int key, int scancode, int action, int mode){
+   printf("%d\n", key);
+   fflush(stdout);
+   if (key == GLFW_KEY_ESCAPE && mode == GLFW_MOD_SHIFT && action == GLFW_PRESS)
+       glfwSetWindowShouldClose(window, GL_TRUE);
+}
+```
+
+### VAO补充
+
+之前的VAO我们只用了一个变量指针，下面这个代码会展示怎么用两个：
+
+```c++
+#include <GL/glew.h>
+#include <stdio.h>
+#include <GLFW/glfw3.h>
+#include <math.h>
+
+const GLuint WIDTH = 800, HEIGHT = 600;
+
+void key_callback(GLFWwindow *window, int key, int scancode, int action, int mode);
+
+const char *vertexShaderSource = "#version 330 core\n"
+                                "layout (location = 0) in vec3 position;\n"
+                                "layout (location = 1) in vec3 color;\n"
+                                "out vec3 ourColor;\n"
+                                "void main()\n"
+                                "{\n"
+                                "   gl_Position = vec4(position.x, position.y, position.z, 1.0);\n"
+                                "   ourColor = color;\n"
+                                "}\0";
+
+const char *fragmentShaderSource = "#version 330 core\n"
+                                  "out vec4 FragColor;\n"
+                                  "in vec3 ourColor;\n"
+                                  "void main()\n"
+                                  "{\n"
+                                  "   FragColor = vec4(ourColor, 1.0f);\n"
+                                  "}\n\0";
+
+
+int main() {
+   glfwInit();
+   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+   glfwWindowHint(GLFW_RESIZABLE, GL_FALSE);
+
+   GLFWwindow *window = glfwCreateWindow(WIDTH, HEIGHT, "LearnOpenGL", nullptr, nullptr);
+   glfwMakeContextCurrent(window);
+   glfwSetKeyCallback(window, key_callback);
+
+   glewExperimental = GL_TRUE;
+   glewInit();
+
+   int width, height;
+   glfwGetFramebufferSize(window, &width, &height);
+   glViewport(0, 0, width, height);
+
+   GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
+   glShaderSource(vertexShader, 1, &vertexShaderSource, NULL);
+   glCompileShader(vertexShader);
+
+   GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
+   glShaderSource(fragmentShader, 1, &fragmentShaderSource, NULL);
+   glCompileShader(fragmentShader);
+
+   GLuint shaderProgram = glCreateProgram();
+   glAttachShader(shaderProgram, vertexShader);
+   glAttachShader(shaderProgram, fragmentShader);
+   glLinkProgram(shaderProgram);
+
+   glDeleteShader(vertexShader);
+   glDeleteShader(fragmentShader);
+
+   GLfloat vertices[] = {
+           0.5f, -0.5f, 0.0f,  1.0f, 0.0f, 0.0f,  // Bottom Right
+           -0.5f, -0.5f, 0.0f,  0.0f, 1.0f, 0.0f,  // Bottom Left
+           0.0f,  0.5f, 0.0f,  0.0f, 0.0f, 1.0f   // Top
+   };
+
+
+   GLuint VBO, VAO;
+
+   glGenBuffers(1, &VBO);
+   glGenVertexArrays(1, &VAO);
+
+   glBindVertexArray(VAO);
+   glBindBuffer(GL_ARRAY_BUFFER, VBO);
+
+   glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+   glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(GLfloat), (GLvoid*) 0);
+   glEnableVertexAttribArray(0);
+    
+    //下面把颜色值绑定到索引值为1的函数指针上
+   glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(GLfloat), (GLvoid*) (3 * sizeof(GLfloat)));
+   glEnableVertexAttribArray(1);
+
+   glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+   glBindVertexArray(0);
+
+   //glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+
+   while (!glfwWindowShouldClose(window)){
+       glfwPollEvents();
+       glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
+       glClear(GL_COLOR_BUFFER_BIT);
+
+
+       glUseProgram(shaderProgram);
+
+       glBindVertexArray(VAO);
+       glDrawArrays(GL_TRIANGLES, 0, 3);
+       //最后输出的图片在片段着色器中进行了片段插值，也就是说对于一个不知道颜色的点，着色器会通过它附近的点的颜色来推测它的颜色
+       glBindVertexArray(0);
+
+       glfwSwapBuffers(window);
+   }
+   glDeleteVertexArrays(1, &VAO);
+   glDeleteBuffers(1, &VBO);
+
+   glfwTerminate();
+   return 0;
+}
+
+void key_callback(GLFWwindow *window, int key, int scancode, int action, int mode){
+   printf("%d\n", key);
+   fflush(stdout);
+   if (key == GLFW_KEY_ESCAPE && mode == GLFW_MOD_SHIFT && action == GLFW_PRESS)
+       glfwSetWindowShouldClose(window, GL_TRUE);
+}
+```
+
+为了简化构建着色器程序的流程以及规范着色器代码，我们用以下代码封装一下着色器程序：
+
+[Code Viewer. Source code: headers/shader (learnopengl.com)](https://learnopengl.com/code_viewer.php?type=header&code=shader)
+
+## 纹理
+
+纹理是一张2D贴图，使用纹理可以在不增加额外顶点数量的同时，给物体加入更多的细节。
+
+这是下面要用到的纹理贴图：
+
+https://learnopengl-cn.readthedocs.io/zh/latest/img/01/06/wall.jpg
+
+纹理的工作原理是，对每一个顶点，我们都指定它对应的纹理坐标位置，对于这组顶点定义的片元，着色器会根据不同模式对其插值。
+
+![img](https://learnopengl-cn.readthedocs.io/zh/latest/img/01/06/tex_coords.png)
+
+纹理坐标的范围是`[0,0]-[1,1]`，不同的插值方式定义了超出纹理坐标范围的图像该怎么绘制：
+
+| 环绕方式             |
+| -------------------- |
+| `GL_REPEAT`          |
+| `GL_MIRRORED_REPEAT` |
+| `GL_CLAMP_TO_EDGE`   |
+| `GL_CLAMP_TO_BORDED` |
+
+具体表现请看图：
+
+![img](https://learnopengl-cn.readthedocs.io/zh/latest/img/01/06/texture_wrapping.png)
+
+对于纹理的s轴和t轴，我们可以定义不同的环绕方式：
+
+```c++
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_MIRRORED_REPEAT);
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_MIRRORED_REPEAT);
+//这个是一个2D纹理，S轴和T轴都采用镜像循环的环绕方式
+
+float borderColor[] = { 1.0f, 1.0f, 0.0f, 1.0f };
+glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderColor);
+//这是一个2D纹理，如果要用GL_CLAMP_TO_BORDED环绕方式，那么同时需要指定超出范围的材质用什么颜色
+//在OpenGL中，函数后缀通常包含了这个函数接受的参数的类型：
+//          |后缀        |含义                    |
+//          |f          |函数需要一个float         |
+//          |i          |函数需要一个int           |
+//          |ui         |函数需要一个unsigned int  |
+//          |3f         |函数需要一个3个float       |
+//          |fv         |函数需要一个float向量或数组 |
+```
+
+因为纹理是一张图，他的分辨率就一定有上限，对于如何把纹理像素转换成具体每个纹理坐标的颜色（想象一下PS里吸取某个点颜色的操作），这个工作叫做**纹理过滤**（Texture Filtering）。
+
+1. 近邻过滤（Nearest Neighbor Filtering），选取最近的一个像素作为这个点的颜色。
+2. 线性过滤（Bilinear Filtering），选取最近的几个像素计算一个插值作为这个点的像素。
+
+![img](https://learnopengl-cn.readthedocs.io/zh/latest/img/01/06/texture_filtering.png)
+
+当纹理被放大和缩小（应用到不同体积的物体）的时候，我们可以选用不同的过滤方式：
+
+```c++
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+//纹理被缩小（Minify），用近邻过滤
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+//纹理被放大（Magnify），用线性过滤
+```
+
+如果离物体比较远，但是使用的纹理贴图还是一样的，就会出现两个问题：
+
+1. 纹理过滤时过滤了大部分颜色，最后可能就剩下一两个颜色，这样物体看起来就不真实了。
+2. 远距离的物体用很高清的纹理，会徒增显存压力。
+
+OpenGL使用**多级渐远纹理**（Mipmap）来处理这个问题，这是一组纹理的集合，后一个纹理图像总是为前一个纹理图案的一半大，当观察者距离超过一定阈值的时候，OpenGL会切换它所使用的纹理。
+
+![img](https://learnopengl-cn.readthedocs.io/zh/latest/img/01/06/mipmaps.png)
+
+OpenGL有一个`glGenerateMipmaps`函数来帮助生成多级渐远纹理，和普通的纹理一样，多级渐远纹理也有纹理过滤：
+
+| 过滤方式                  | 描述                                       |
+| ------------------------- | ------------------------------------------ |
+| GL_NEAREST_MIPMAP_NEAREST | 用最匹配的一张纹理，并使用邻近过滤计算颜色 |
+| GL_LINEAR_MIPMAP_NEAREST  | 用最匹配的一张纹理，并使用线性过滤计算颜色 |
+| GL_NEAREST_MIPMAP_LINEAR  | 用多张接近的纹理，使用邻近过滤计算颜色     |
+| GL_LINEAR_MIPMAP_LINEAR   | 用多张接近的纹理，并使用线性过滤计算颜色   |
+
+```c++
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+//特别注意此处，因为多级渐远纹理是用来处理纹理被缩小的情况的，对于放大，我们不用多级渐远纹理的过滤方式，如果用了会报错
+```
+
+使用纹理的第一件事肯定是要把对应的纹理图案加载到程序中，SOIL是简易OpenGL图像库，它就支持大多数流行的图像格式。因为SOIL的官网垮掉了，所以这里提供一个Github的下载链接：https://github.com/kbranigan/Simple-OpenGL-Image-Library
+
+```c++
+#include <GL/glew.h>
+#include <stdio.h>
+#include <GLFW/glfw3.h>
+#include <SOIL.h>
+#include "Shader.h"
+
+const GLuint WIDTH = 800, HEIGHT = 600;
+
+void key_callback(GLFWwindow *window, int key, int scancode, int action, int mode);
+
+int main() {
+   glfwInit();
+   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+   glfwWindowHint(GLFW_RESIZABLE, GL_FALSE);
+
+   GLFWwindow *window = glfwCreateWindow(WIDTH, HEIGHT, "LearnOpenGL", nullptr, nullptr);
+   glfwMakeContextCurrent(window);
+   glfwSetKeyCallback(window, key_callback);
+
+   glewExperimental = GL_TRUE;
+   glewInit();
+
+   glViewport(0, 0, WIDTH, HEIGHT);
+
+   Shader myShader("vertex shader path", "fragment shader path");
+
+   GLfloat vertices[] = {
+           // Positions          // Colors           // Texture Coords
+           0.5f,  0.5f, 0.0f,   1.0f, 0.0f, 0.0f,   1.0f, 1.0f, // Top Right
+           0.5f, -0.5f, 0.0f,   0.0f, 1.0f, 0.0f,   1.0f, 0.0f, // Bottom Right
+           -0.5f, -0.5f, 0.0f,   0.0f, 0.0f, 1.0f,   0.0f, 0.0f, // Bottom Left
+           -0.5f,  0.5f, 0.0f,   1.0f, 1.0f, 0.0f,   0.0f, 1.0f  // Top Left
+   };
+
+   GLuint indices[] = {
+           0, 1, 3,
+           1, 2, 3
+   };
+
+
+   GLuint VBO, VAO, EBO;
+
+   glGenBuffers(1, &VBO);
+   glGenBuffers(1, &EBO);
+   glGenVertexArrays(1, &VAO);
+
+   glBindVertexArray(VAO);
+   glBindBuffer(GL_ARRAY_BUFFER, VBO);
+   glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
+
+   glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+   glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+
+   glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(GLfloat), (GLvoid*) 0);
+   glEnableVertexAttribArray(0);
+
+   glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(GLfloat), (GLvoid*) (3 * sizeof(GLfloat)));
+   glEnableVertexAttribArray(1);
+
+   glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(GLfloat), (GLvoid*) (6 * sizeof(GLfloat)));
+   glEnableVertexAttribArray(2);
+    //将纹理坐标绑定到VAO的第三个顶点属性指针上
+
+   glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+   glBindVertexArray(0);
+
+   GLuint texture;
+   glGenTextures(1, &texture);
+   glBindTexture(GL_TEXTURE_2D, texture);
+    //绑定纹理
+
+   glTextureParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+   glTextureParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+
+   glTextureParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+   glTextureParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+   int width, height;
+   unsigned char *image = SOIL_load_image("texture path", &width, &height, 0, SOIL_LOAD_RGB);
+    //加载贴图，第二个和第三个参数会返回贴图的宽和高，第四个参数返回图片的通道数，最后一个参数告诉SOIL我们只关心图片的RGB值，函数返回值是一个很大的数组
+   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, image);
+    //第一个参数指定了纹理目标，之前绑定了纹理对象到GL_TEXTURE_2D上，那么和其他绑定的原理一样，对GL_TEXTURE_2D的配置都会应用到这个对象上
+    //第二个参数为纹理指定多级纹理的级别，这里设置0，表示基本级别
+    //第三个参数表示纹理的存储格式，我们只有RGB，所以存为GL_RGB
+    //第四和第五参数表示纹理的宽高
+    //第六个参数总是被设置为0，不需要纠结它
+    //第七第八个参数指定了源图的格式和数组的数据类型，我们用RGB加载的原图，用char（unsigned byte）存储的原图
+    //最后一个是真正的图像数据
+   glGenerateMipmap(GL_TEXTURE_2D);
+    //因为之前没有加载多级渐远纹理，所以在生成纹理后，我们需要手动调用并生成，这会为当前绑定的纹理自动生成所有需要的多级渐远纹理
+   SOIL_free_image_data(image);
+   glBindTexture(GL_TEXTURE_2D, 0);
+
+   while (!glfwWindowShouldClose(window)){
+       glfwPollEvents();
+       glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
+       glClear(GL_COLOR_BUFFER_BIT);
+
+
+       glBindTexture(GL_TEXTURE_2D, texture);
+       myShader.Use();
+
+       glBindVertexArray(VAO);
+       glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+       glBindVertexArray(0);
+
+       glfwSwapBuffers(window);
+   }
+   glDeleteVertexArrays(1, &VAO);
+   glDeleteBuffers(1, &VBO);
+   glDeleteBuffers(1, &EBO);
+
+   glfwTerminate();
+   return 0;
+}
+
+void key_callback(GLFWwindow *window, int key, int scancode, int action, int mode){
+   printf("%d\n", key);
+   fflush(stdout);
+   if (key == GLFW_KEY_ESCAPE && mode == GLFW_MOD_SHIFT && action == GLFW_PRESS)
+       glfwSetWindowShouldClose(window, GL_TRUE);
+}
+```
+
+顶点着色器：
+
+```glsl
+#version 330 core
+layout (location = 0) in vec3 position;
+layout (location = 1) in vec3 color;
+layout (location = 2) in vec2 texCoord;
+
+out vec3 ourColor;
+out vec2 TexCoord;
+
+void main()
+{
+    gl_Position = vec4(position, 1.0f);
+    ourColor = color;
+    TexCoord = texCoord;
+}
+```
+
+片段着色器：
+
+```glsl
+#version 330 core
+in vec3 ourColor;
+in vec2 TexCoord;
+
+out vec4 color;
+
+uniform sampler2D ourTexture;
+//sample被称为采样器，它以贴图的纹理类型作为后缀
+//采样器会和glDrawElements沟通，调用glDrawElements之后，它会把纹理赋值给采样器
+
+void main()
+{
+    color = texture(ourTexture, TexCoord);
+    //texture函数用于采样纹理的颜色，第一个参数是一个采样器，第二个参数是对应的纹理坐标
+}
+```
+
+使用多个纹理贴图：
+
+```c++
+myShader.Use();
+
+//glActiveTexture(GL_TEXTURE0);
+//在绑定纹理单元到对应采样器之前，需要先激活对应的纹理单元，这点和VAO要激活顶点属性类似
+//GL_TEXTURE0是默认激活的，所以不用特别说明也行
+glBindTexture(GL_TEXTURE_2D, texture);
+glUniform1i(glGetUniformLocation(myShader.Program, "ourTexture"), 0);
+//使用这个函数，我们会给对应的纹理采样器分配一个索引值，这个索引值被称为纹理单元（Texture Unit），纹理单元和glGetUniformLocation返回的索引值，顶点属性的索引值（VAO指针索引值）是不同的索引值，不会冲突
+//glGetUniformLocation返回的是一个指出着色器程序中这个变量位置的值，我们通过这个值，给对应的纹理采样器一个纹理单元，上限是16，它们的定义是连续的，也就是说GL_TEXTURE0+1==GL_TEXTURE1
+//虽然纹理单元是被连续定义的，但我们使用的时候并没有被要求一定要把采样器按顺序绑定纹理单元，也就是说绑定完0后，不一定要绑定1
+//一个纹理的默认纹理单元是0（所以其实注释掉这段代码也没问题），如果不特别指定，所有的纹理的纹理单元都会是0，所以在多贴图的时候要重新指定纹理单元
+
+glActiveTexture(GL_TEXTURE1);
+glBindTexture(GL_TEXTURE_2D, texture2);
+glUniform1i(glGetUniformLocation(myShader.Program, "ourTexture2"), 1);
+
+glBindVertexArray(VAO);
+glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+glBindVertexArray(0);
+```
+
+对应的片段着色器
+
+```glsl
+#version 330 core
+...
+
+uniform sampler2D ourTexture1;
+uniform sampler2D ourTexture2;
+
+void main()
+{
+    color = mix(texture(ourTexture1, TexCoord), texture(ourTexture2, TexCoord), 0.2);
+    //mix函数会混合两个值，第三个值表示它们的混合比例
+}
+```
+
