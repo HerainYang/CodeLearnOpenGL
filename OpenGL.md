@@ -124,7 +124,9 @@ void key_callback(GLFWwindow *window, int key, int scancode, int action, int mod
 
 > 经过顶点着色器处理的数据会被映射到**标准化设备坐标**（Normalized Device Coordinates）中，这个坐标的xyz值在$[-1.0,1.0]$范围中，在这个范围外的点会被裁剪。
 >
-> y轴方向向上，x轴方向向右，z轴方向向后，原点在图像中心。
+> OpenGL采用的是右手坐标系，其中y轴方向向上，x轴方向向右，z轴方向向后，原点在图像中心。
+>
+> ![coordinate_systems_right_handed](https://learnopengl-cn.github.io/img/01/08/coordinate_systems_right_handed.png)
 >
 > 在这之后，标准化设备坐标会通过**视口转换**（Viewport Transform）转换为**屏幕空间坐标**（Scrren-space Coordinates）。再之后屏幕空间坐标又会被变换为片段输入到片段着色器中。
 
@@ -1287,5 +1289,263 @@ void main()
 }
 ```
 
+## 坐标系统
 
+这一章节会讨论五个不同的坐标系统：
+
+1. 局部空间（Local Space），相对一个局部原点的坐标。
+2. 世界空间（World Space），相对一个全局原点的坐标。
+3. 观察空间（View Space），每个坐标都是从摄像机或者观察者角度进行观察的。
+4. 裁剪空间（Clip Space），裁剪坐标的范围是`[-1,1]`，在这之外的点会被裁剪。
+5. 屏幕空间（Screen Space），视口变换会把裁剪坐标变换到由glViewport函数所定义的坐标范围内。
+
+从上到下，是一个顶点在被转换成片段之前要经历的所有不同状态。
+
+要将一个空间转换到另一个空间，需要用到几个重要的变换矩阵：**模型**（Model），**观察**（View），**投影**（Projection），下图（其中观察空间的描述不够恰当，可以想象观察空间是以摄像机为原点构建的一个坐标系）展示了整个流程以及各个变换过程做了什么：
+
+![coordinate_systems](https://learnopengl-cn.github.io/img/01/08/coordinate_systems.png)
+
+裁切空间中，如何判断什么应该被裁切掉是很重要的一点，为此我们需要定义一个**投影矩阵**，它定义了一个范围值，在这个范围内的坐标会被标准化到`[-1.0, 1.0]`，超出范围的会被裁减。如果某个物体只有一部分超出了**剪裁体积**（Clipping Volumn），那么OpenGL会为此重建一个会多个三角形（图元）让其能够适合这个范围。
+
+由投影矩阵描绘的观察箱被称为**平截头体**（Frustum），在平截头体范围内的坐标最终会出现在屏幕上，这个坐标转换过程被称为投影。这个转换过程有两种不同的形式，每种都定义了不同的平截头体。
+
+正射投影（Orthographic Projection Matrix）
+
+![orthographic projection frustum](https://learnopengl-cn.github.io/img/01/08/orthographic_frustum.png)
+
+正交投影的平截头体是一个立方体，平截头体由宽，高，近平面，远平面指定。
+
+GLM的内置函数提供了创建正交矩阵的方法：
+
+```c++
+glm::ortho(0.0f, 800.0f, 0.0f, 600.0f, 0.1f, 100.0f);
+//前两个参数指定了平截头体的左右坐标（width）
+//第三第四个参数指定了平截头题的底部和顶部坐标（height）
+//第五第六个参数定义了近平面和远平面的坐标
+```
+
+透视投影（Perspective Projection Matrix）
+
+透视投影因为考虑了近大远小的关系，看起来会更贴近真实。
+
+![ perspective_frustum](https://learnopengl-cn.github.io/img/01/08/perspective_frustum.png)
+
+在描述透视投影之前，我想先理清一下为什么OpenGL表示一个三维的点要用一个4分量的向量，以及最后一个向量w的意义是什么，我们从三个方向分析：
+
+1. 在一个坐标系中，向量和点的表示方式完全是一模一样的，那怎么区分向量和点呢？这时候w就可以派上用场了，当w为1的时候，它表示一个点，当w为0的时候，它表示一个向量。这样表示有个很巧妙地地方，我们知道一个向量是两个点做减法得出的，当两个点相减后，w恰好为0，我们又指定一个向量加一个点可以表示这个点经过这个向量能到达的终点，这是w恰好又为1。
+
+2. 虽然从小的数学教育告诉我们，同一个平面的两条平行直线不会相交，但是从视觉角度来说，这个定理是不成立的，比如下图这种情况：
+
+   ![img](https://img-blog.csdnimg.cn/20190709195103643.png)
+
+   可以看到两条铁路在很远的地方是相交的，那我们应该怎么表示这种情况呢，同样，也是引入齐次坐标w。在有的教学中认为距离越远，w越小，但是我觉得应该是距离越远，w越大。这里用w转换坐标到笛卡尔坐标系（也就是裁剪空间），即$(x,y,z,w)\rightarrow(\frac{x}{w},\frac{y}{w},\frac{z}{w})$，如果w足够大，那么任何点都会汇聚在原点。在透视投影中如何理解w的存在呢，可以想象w是沿着z轴上运动的一个点（要注意z轴方向是从屏幕出发指向我们），随着点的远离，w会增大。
+   
+3. 对于缩放和旋转，我们都可以用3乘3的变换矩阵来做乘法运算，但是平移加法运算的结果，有没有办法可以让平移也做乘法运算呢？答案是升维，正如之前给出的公式，在四维空间中，三维的点的平移也可以是乘法运算。
+
+了解了w的意义之后，那么再来看看w的应用，在透视投影中，任何笛卡尔坐标（$(x,y,z,w)\rightarrow(\frac{x}{w},\frac{y}{w},\frac{z}{w})$）在`[-1,1]`范围外的点都会被裁切。关于透视投影矩阵的证明过程在我的Unity记录里有记载，欢迎查阅。
+
+GLM的内置函数提供了创建透视矩阵的方法：
+
+```c++
+glm::mat4 proj = glm::perspective(glm::radians(45.0f), (float)width/(float)height, 0.1f, 100.0f);
+//第一个参数定义了FOV，即视野大小，一般来说45度比较真实
+//第二个参数定义了视口的宽高比，比如上面的铁路图就比较接近1：1
+//第三第四个参数定义了平截头体近平面和远平面的坐标
+```
+
+学会了投影的方法之后，空间转换的前四步就都不是问题了，至于最后一步，回想一下代码中`glViewport`这个函数，它帮我们干了最后一件事，视口转换。用线代知识总结一下前四步的过程：
+$$
+V_{clip}=M_{projection}\cdot M_{view}\cdot M_{model}\cdot V_{local}
+$$
+这里帮大家回忆一下一个知识点，对某个矩阵进行一个操作，等于这个矩阵*左乘*这个操作对应的变换矩阵。
+
+下面是一个简单的3D物体渲染的代码，请注意其中关于Z缓冲的解释：
+
+```c++
+#include <GL/glew.h>
+#include <stdio.h>
+#include <GLFW/glfw3.h>
+#include <SOIL.h>
+#include "Shader.h"
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
+const GLuint WIDTH = 800, HEIGHT = 600;
+
+void key_callback(GLFWwindow *window, int key, int scancode, int action, int mode);
+
+using namespace glm;
+
+int main() {
+   glfwInit();
+   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+   glfwWindowHint(GLFW_RESIZABLE, GL_FALSE);
+
+   GLFWwindow *window = glfwCreateWindow(WIDTH, HEIGHT, "Hengine", nullptr, nullptr);
+   glfwMakeContextCurrent(window);
+   glfwSetKeyCallback(window, key_callback);
+
+   glewExperimental = GL_TRUE;
+   glewInit();
+
+   glViewport(0, 0, WIDTH, HEIGHT);
+
+   Shader myShader("/home/herain/Documents/opengl/Shader/texture/shader.vertex", "/home/herain/Documents/opengl/Shader/texture/shader.fragment");
+
+   float vertices[] = {
+           -0.5f, -0.5f, -0.5f,  0.0f, 0.0f,
+           0.5f, -0.5f, -0.5f,  1.0f, 0.0f,
+           0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
+           0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
+           -0.5f,  0.5f, -0.5f,  0.0f, 1.0f,
+           -0.5f, -0.5f, -0.5f,  0.0f, 0.0f,
+
+           -0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
+           0.5f, -0.5f,  0.5f,  1.0f, 0.0f,
+           0.5f,  0.5f,  0.5f,  1.0f, 1.0f,
+           0.5f,  0.5f,  0.5f,  1.0f, 1.0f,
+           -0.5f,  0.5f,  0.5f,  0.0f, 1.0f,
+           -0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
+
+           -0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
+           -0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
+           -0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+           -0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+           -0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
+           -0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
+
+           0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
+           0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
+           0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+           0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+           0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
+           0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
+
+           -0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+           0.5f, -0.5f, -0.5f,  1.0f, 1.0f,
+           0.5f, -0.5f,  0.5f,  1.0f, 0.0f,
+           0.5f, -0.5f,  0.5f,  1.0f, 0.0f,
+           -0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
+           -0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+
+           -0.5f,  0.5f, -0.5f,  0.0f, 1.0f,
+           0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
+           0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
+           0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
+           -0.5f,  0.5f,  0.5f,  0.0f, 0.0f,
+           -0.5f,  0.5f, -0.5f,  0.0f, 1.0f
+   };
+
+
+   GLuint VBO, VAO;
+
+   glGenBuffers(1, &VBO);
+   glGenVertexArrays(1, &VAO);
+
+   glBindVertexArray(VAO);
+   glBindBuffer(GL_ARRAY_BUFFER, VBO);
+
+   glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+   glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(GLfloat), (GLvoid*) 0);
+   glEnableVertexAttribArray(0);
+
+   glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(GLfloat), (GLvoid*) (3 * sizeof(GLfloat)));
+   glEnableVertexAttribArray(1);
+
+   glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+   glBindVertexArray(0);
+
+   GLuint texture, texture2;
+   int width, height;
+   glGenTextures(1, &texture);
+   glGenTextures(1, &texture2);
+
+   glBindTexture(GL_TEXTURE_2D, texture);
+   glTextureParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+   glTextureParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+   glTextureParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+   glTextureParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+   unsigned char *image = SOIL_load_image("/home/herain/Documents/opengl/Shader/texture/ti.png", &width, &height, 0, SOIL_LOAD_RGB);
+   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, image);
+   glGenerateMipmap(GL_TEXTURE_2D);
+   SOIL_free_image_data(image);
+
+   glBindTexture(GL_TEXTURE_2D, texture2);
+   glTextureParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+   glTextureParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+   glTextureParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+   glTextureParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+   unsigned char *image2 = SOIL_load_image("/home/herain/Documents/opengl/Shader/texture/container.jpg", &width, &height, 0, SOIL_LOAD_RGB);
+   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, image2);
+   glGenerateMipmap(GL_TEXTURE_2D);
+   SOIL_free_image_data(image2);
+
+   glBindTexture(GL_TEXTURE_2D, 0);
+
+   glEnable(GL_DEPTH_TEST);
+    //启用深度缓冲，OpenGL将所有深度信息都存在一个Z缓冲里，这个缓冲是GLFW自动生成的
+    //对于每个片段，OpenGL会把它的深度值和z缓冲的深度值进行比较，如果这个片段的深度值在缓冲的深度值后面，就会被丢弃，不然就覆盖，最后只有深度值等于缓冲里深度值的片段会被渲染。
+    //一般来说深度测试时关闭的，需要手动打开
+
+
+   while (!glfwWindowShouldClose(window)){
+       glfwPollEvents();
+       glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
+       glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+       //上次循环的深度值需要被清除，这个不用多说
+
+
+       myShader.Use();
+
+       mat4 model = mat4(1.0f);
+       model = rotate(model, (float)glfwGetTime(), vec3(0.5f, 1.0f, 0.0f));
+
+       mat4 view = mat4(1.0f);
+       view = translate(view, vec3(0.0f, 0.0f, -3.0f));
+       //解释一下这个操作，在着色器中我们是对物体进行矩阵操作，摄像头往后退，相对来说等于物体远离摄像头，那么如果摄像头为定点，那我们相对移动物体就行了
+
+       mat4 projection = mat4(1.0f);
+       projection = perspective(radians(45.0f), (float)WIDTH/(float)HEIGHT, 0.1f, 100.0f);
+
+       int modelLoc = glGetUniformLocation(myShader.Program, "model");
+       glUniformMatrix4fv(modelLoc, 1, GL_FALSE, value_ptr(model));
+
+       int viewLoc = glGetUniformLocation(myShader.Program, "view");
+       glUniformMatrix4fv(viewLoc, 1, GL_FALSE, value_ptr(view));
+
+       int persLoc = glGetUniformLocation(myShader.Program, "projection");
+       glUniformMatrix4fv(persLoc, 1, GL_FALSE, value_ptr(projection));
+
+       //glActiveTexture(GL_TEXTURE0);
+       glBindTexture(GL_TEXTURE_2D, texture);
+       //glUniform1i(glGetUniformLocation(myShader.Program, "ourTexture"), 0);
+
+       glActiveTexture(GL_TEXTURE1);
+       glBindTexture(GL_TEXTURE_2D, texture2);
+       glUniform1i(glGetUniformLocation(myShader.Program, "ourTexture2"), 1);
+
+       glBindVertexArray(VAO);
+       glDrawArrays(GL_TRIANGLES, 0, 36);
+       glBindVertexArray(0);
+
+       glfwSwapBuffers(window);
+   }
+   glDeleteVertexArrays(1, &VAO);
+   glDeleteBuffers(1, &VBO);
+
+   glfwTerminate();
+   return 0;
+}
+
+void key_callback(GLFWwindow *window, int key, int scancode, int action, int mode){
+   printf("%d\n", key);
+   fflush(stdout);
+   if (key == GLFW_KEY_ESCAPE && mode == GLFW_MOD_SHIFT && action == GLFW_PRESS)
+       glfwSetWindowShouldClose(window, GL_TRUE);
+}
+```
 
