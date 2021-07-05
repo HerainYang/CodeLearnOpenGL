@@ -754,7 +754,7 @@ https://learnopengl-cn.readthedocs.io/zh/latest/img/01/06/wall.jpg
 
 ![img](https://learnopengl-cn.readthedocs.io/zh/latest/img/01/06/tex_coords.png)
 
-纹理坐标的范围是`[0,0]-[1,1]`，不同的插值方式定义了超出纹理坐标范围的图像该怎么绘制：
+纹理坐标的范围是`[0,0]-[1,1]`，我们总是把贴图平铺到这个范围的正方形，不同的插值方式定义了超出纹理坐标范围的图像该怎么绘制：
 
 | 环绕方式             |
 | -------------------- |
@@ -1034,4 +1034,258 @@ void main()
     //mix函数会混合两个值，第三个值表示它们的混合比例
 }
 ```
+
+## 变换
+
+一个向量包含一个**方向**（Direction）和**大小**（Magnitude），起点为原点的向量被称作**位置向量**（Position Vector），向量的运算包括：
+
+* 向量加**标量**（Scalar）
+
+* 向量取反
+
+* 向量加减
+
+* 向量求长度（用标准化算**单位向量**（Unit Vector））
+
+* 向量乘积
+
+  * 点乘：$\vec v \cdot\vec k=\Vert\vec v\Vert\cdot\Vert\vec k\Vert\cdot\cos\theta$，或$\sum _{i=0}^n v_i\times k_i$，点乘可以用来测试两个向量是否垂直或平行
+
+  * 叉乘：两个向量的叉乘结果会垂直于这两个向量
+    $$
+    \left(
+    \begin{array}{c}
+    A_x \\
+    A_y \\
+    A_z
+    \end{array}
+    \right)
+    \times
+    \left(
+    \begin{array}{c}
+    B_x \\
+    B_y \\
+    B_z
+    \end{array}
+    \right)
+    =
+    \left(
+    \begin{array}{c}
+    A_y\cdot B_z - A_z\cdot B_y \\
+    A_z\cdot B_x - A_x\cdot B_z   \\
+    A_x\cdot B_y - A_y\cdot B_x
+    \end{array}
+    \right)
+    $$
+
+矩阵的运算包括：
+
+* 矩阵加标量
+
+* 矩阵乘标量
+
+* 矩阵相乘：
+
+  ![Matrix Multiplication](https://learnopengl-cn.github.io/img/01/07/matrix_multiplication.png)
+
+* 单位矩阵
+
+上面的都是基础中的基础，比较重要的三个变换操作是缩放，位移和旋转。
+
+要看懂这三个操作，首先要弄清变换矩阵右下角这个常量的意义。在前面提到过，一个有四个分量的向量可以被表示为xyzw，这个w就是这个向量，也叫做齐次坐标。如果没有齐次坐标，我们就无法位移坐标。所以如果齐次坐标为0，这个向量就代表一个方向向量。如果不是方向向量，那它的齐次坐标就是1。
+
+缩放
+$$
+\left[
+\begin{array}{cccc}
+S_1 & 0   & 0   & 0\\
+0   & S_2 & 0   & 0\\
+0   & 0   & S_3 & 0\\
+0   & 0   & 0   & 1
+\end{array}
+\right]
+\cdot
+\left(
+\begin{array}{c}
+x \\
+y \\
+z \\
+1
+\end{array}
+\right)
+=
+\left(
+\begin{array}{c}
+S_1 \\
+S_2 \\
+S_3 \\
+1
+\end{array}
+\right)
+$$
+如果**缩放因子**（Scaling Factor）都一样，那么这个缩放操作就是均匀缩放。
+
+位移
+$$
+\left[
+\begin{array}{cccc}
+1   & 0   & 0   & T_x\\
+0   & 1   & 0   & T_y\\
+0   & 0   & 1   & T_z\\
+0   & 0   & 0   & 1
+\end{array}
+\right]
+\cdot
+\left(
+\begin{array}{c}
+x \\
+y \\
+z \\
+1
+\end{array}
+\right)
+=
+\left(
+\begin{array}{c}
+x + T_x \\
+y + T_y \\
+z + T_z \\
+1
+\end{array}
+\right)
+$$
+
+
+旋转
+
+> 弧度转角度：$角度=弧度\times (180/\pi)$
+>
+> 角度转弧度：$弧度=角度\times (\pi/180)$
+
+沿x轴旋转
+$$
+\left[
+\begin{array}{cccc}
+1   & 0   & 0   & 0\\
+0   & \cos\theta& -\sin\theta   & 0\\
+0   & \sin\theta   & \cos\theta   & 0\\
+0   & 0   & 0   & 1
+\end{array}
+\right]
+\cdot
+\left(
+\begin{array}{c}
+x \\
+y \\
+z \\
+1
+\end{array}
+\right)
+=
+\left(
+\begin{array}{c}
+x \\
+\cos\theta \cdot y-\sin\theta\cdot z \\
+\sin\theta \cdot y+\cos\theta\cdot z \\
+1
+\end{array}
+\right)
+$$
+沿y轴旋转
+$$
+\left[
+\begin{array}{cccc}
+\cos\theta & 0   & \sin\theta   & 0\\
+0   & 1 &  0  & 0\\
+-\sin\theta   &  0  & \cos\theta   & 0\\
+0   & 0   & 0   & 1
+\end{array}
+\right]
+\cdot
+\left(
+\begin{array}{c}
+x \\
+y \\
+z \\
+1
+\end{array}
+\right)
+=
+\left(
+\begin{array}{c}
+\cos\theta \cdot x +\sin\theta\cdot z\\
+ y \\
+-\sin\theta \cdot x +\cos\theta\cdot z \\
+1
+\end{array}
+\right)
+$$
+沿z轴旋转
+$$
+\left[
+\begin{array}{cccc}
+\cos\theta & -\sin\theta   & 0   & 0\\
+\sin\theta   & \cos\theta &  0  & 0\\
+0   &  0  &  1  & 0\\
+0   & 0   & 0   & 1
+\end{array}
+\right]
+\cdot
+\left(
+\begin{array}{c}
+x \\
+y \\
+z \\
+1
+\end{array}
+\right)
+=
+\left(
+\begin{array}{c}
+\cos\theta \cdot x -\sin\theta\cdot y\\
+\sin\theta \cdot x +\cos\theta\cdot y \\
+z \\
+1
+\end{array}
+\right)
+$$
+了解这些运算后，如何将其运用到代码中呢，首先是要装好矩阵运算需要的库`GLM`，下载链接如下：https://github.com/g-truc/glm/tags
+
+```c++
+glm::mat4 trans = glm::mat4(1.0f)
+//声明一个矩阵，并初始化为（1.0，1.0，1.0，1.0）
+trans = glm::translate(trans, glm::vec3(1.0f, 1.0f, 0.0f));
+//平移
+trans = glm::rotate(trans, glm::radians(90.0f), glm::vec3(0.0, 0.0, 1.0));
+//围绕glm::vec3(0.0, 0.0, 1.0)旋转90度，因为这个函数接受的是弧度制，所以需要转换一下
+trans = glm::scale(trans, glm::vec3(0.5, 0.5, 0.5));
+//缩放
+unsigned int transformLoc = glGetUniformLocation(ourShader.ID, "transform");
+glUniformMatrix4fv(transformLoc, 1, GL_FALSE, glm::value_ptr(trans));
+//我们要设置一个4行4列的矩阵，那么后缀是Matrix4，fv代表函数想要一个矩阵作为参数
+//第二个参数表示我们需要传送几个矩阵
+//第三个参数询问我们是否要转置矩阵，在线性代数中，我们用的是行主序，但是在OpenGL中我们用的是列主序矩阵，幸运的是GLM默认布局也是列主序，所以此处不需要转置
+//第四个参数表示真正的矩阵数据，因为GLM的数据并不是OpenGL接受的那种，所以需要用value_ptr转换一下
+```
+
+对应的顶点着色器：
+
+```glsl
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec2 aTexCoord;
+
+out vec2 TexCoord;
+
+uniform mat4 transform;
+
+void main()
+{
+    gl_Position = transform * vec4(aPos, 1.0f);
+    //转换矩阵的应用是左乘
+    TexCoord = vec2(aTexCoord.x, 1.0 - aTexCoord.y);
+}
+```
+
+
 
