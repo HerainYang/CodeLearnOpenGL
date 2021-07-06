@@ -1549,3 +1549,365 @@ void key_callback(GLFWwindow *window, int key, int scancode, int action, int mod
 }
 ```
 
+## 摄像机
+
+在之前的例子中，我们没有处理摄像机的位置，而是让场景本身移动，然而这样操作是反常识的。那么如何构建摄像机呢？首先要构建以摄像机为原点的坐标系，一个坐标系包括原点和前，右，上三个轴。
+
+原点位置
+
+原点位置很容易获取，想让摄像机在哪，哪里就是摄像机位置。
+
+**前轴**
+
+要注意一点，摄像机指向方向和之前提到过的坐标系方向一样，是-z方向，而此处我们要获取的前轴方向是+z方向，所以是摄像机位置减去目标位置。
+
+**右轴**
+
+计算右轴方向，我们可以定义一个上向量，用叉乘算出答案。
+
+**上轴**
+
+利用刚算出来的右轴叉乘前轴，也可以简单算出答案。
+
+有了三个轴和原点的信息，我们就可以利用它们构造`LookAt` 矩阵了：
+$$
+LookAt=
+\left[\begin{array}{cccc}
+R_x & R_y & R_z & 0 \\
+U_x & U_y & U_z & 0 \\
+D_x & D_y & D_z & 0 \\
+0   & 0   & 0   & 0 \\
+\end{array}\right]
+\cdot
+\left[\begin{array}{cccc}
+1   & 0   & 0   & -P_x \\
+0   & 1   & 0   & -P_y \\
+0   & 0   & 1   & -P_z \\
+0   & 0   & 0   & 1    \\
+\end{array}\right]
+$$
+其中，R是右向量，U是上向量，D是方向向量，P是摄像机位置。为什么位置要取反呢，因为原理上来说，LookAt函数是通过移动世界坐标到相反的方向来模拟摄像机运动的。
+
+大致了解摄像机位置的原理之后，我们继续了解一下摄像机角度，表示旋转我们使用欧拉角：
+
+![img](http://www.learnopengl.com/img/getting-started/camera_pitch_yaw_roll.png)
+
+在摄像机系统中，我们只需考虑俯仰角（pitch）和偏航角（yaw）。
+
+请注意两点：
+
+* 正如图中所示，随着数值（指pitch，yaw，roll）增加，物体呈顺时针旋转，此时实际角度减小。
+* 当pitch和yaw都为0时，物体默认看向+z轴方向。
+
+下面给出的代码请注意看：
+
+1. 怎么绑定鼠标监听函数
+2. 如何设置摄像机角度以及为何这么设置
+3. yaw变量的初始值
+4. LookAt函数的设置
+5. delta时间的解释
+
+```c++
+#include <GL/glew.h>
+#include <stdio.h>
+#include <GLFW/glfw3.h>
+#include <SOIL.h>
+#include "Shader.h"
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
+const GLuint WIDTH = 800, HEIGHT = 600;
+
+void mouse_callback(GLFWwindow* window, double xpos, double ypos);
+void key_callback(GLFWwindow *window, int key, int scancode, int action, int mode);
+void scrool_callback(GLFWwindow* window, double xoffset, double yoffset);
+void pos_update();
+
+using namespace glm;
+
+vec3 cameraPos = vec3(0.0f, 0.0f, 3.0f);
+vec3 cameraFront = vec3(0.0f, 0.0f, -1.0f);
+vec3 cameraUp = vec3(0.0f, 1.0f, 0.0f);
+
+bool keys[1024];
+GLfloat currentFrame = 0.0f;
+GLfloat lastFrame = 0.0f;
+GLfloat deltaFrame = 0.0f;
+
+GLfloat gPitch = 0.0f;
+GLfloat gYaw = 180.0f;
+//请注意这里的yaw初始值是180，因为默认0的时候摄像机是看向+z方向的，而我们需要摄像机看向-z方向，所以逆时针转180度
+GLfloat fov = 45.0f;
+GLfloat lastX = WIDTH/2.0;
+GLfloat lastY = HEIGHT/2.0;
+
+bool initMouse = true;
+
+int main() {
+   glfwInit();
+   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+   glfwWindowHint(GLFW_RESIZABLE, GL_FALSE);
+
+   GLFWwindow *window = glfwCreateWindow(WIDTH, HEIGHT, "Hengine", nullptr, nullptr);
+   glfwMakeContextCurrent(window);
+   glfwSetKeyCallback(window, key_callback);
+   glfwSetCursorPosCallback(window, mouse_callback);
+    //绑定鼠标监听函数
+   glfwSetScrollCallback(window, scrool_callback);
+    //绑定滚轮监听函数
+
+   glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    //设置光标，让光标不可见
+
+   glewExperimental = GL_TRUE;
+   glewInit();
+
+   glViewport(0, 0, WIDTH, HEIGHT);
+
+   Shader myShader("/home/herain/Documents/opengl/Shader/texture/shader.vertex", "/home/herain/Documents/opengl/Shader/texture/shader.fragment");
+
+   float vertices[] = {
+           -0.5f, -0.5f, -0.5f,  0.0f, 0.0f,
+           0.5f, -0.5f, -0.5f,  1.0f, 0.0f,
+           0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
+           0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
+           -0.5f,  0.5f, -0.5f,  0.0f, 1.0f,
+           -0.5f, -0.5f, -0.5f,  0.0f, 0.0f,
+
+           -0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
+           0.5f, -0.5f,  0.5f,  1.0f, 0.0f,
+           0.5f,  0.5f,  0.5f,  1.0f, 1.0f,
+           0.5f,  0.5f,  0.5f,  1.0f, 1.0f,
+           -0.5f,  0.5f,  0.5f,  0.0f, 1.0f,
+           -0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
+
+           -0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
+           -0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
+           -0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+           -0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+           -0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
+           -0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
+
+           0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
+           0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
+           0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+           0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+           0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
+           0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
+
+           -0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+           0.5f, -0.5f, -0.5f,  1.0f, 1.0f,
+           0.5f, -0.5f,  0.5f,  1.0f, 0.0f,
+           0.5f, -0.5f,  0.5f,  1.0f, 0.0f,
+           -0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
+           -0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
+
+           -0.5f,  0.5f, -0.5f,  0.0f, 1.0f,
+           0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
+           0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
+           0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
+           -0.5f,  0.5f,  0.5f,  0.0f, 0.0f,
+           -0.5f,  0.5f, -0.5f,  0.0f, 1.0f
+   };
+
+   glm::vec3 cubePositions[] = {
+           glm::vec3( 0.0f,  0.0f,  0.0f),
+           glm::vec3( 2.0f,  5.0f, -15.0f),
+           glm::vec3(-1.5f, -2.2f, -2.5f),
+           glm::vec3(-3.8f, -2.0f, -12.3f),
+           glm::vec3( 2.4f, -0.4f, -3.5f),
+           glm::vec3(-1.7f,  3.0f, -7.5f),
+           glm::vec3( 1.3f, -2.0f, -2.5f),
+           glm::vec3( 1.5f,  2.0f, -2.5f),
+           glm::vec3( 1.5f,  0.2f, -1.5f),
+           glm::vec3(-1.3f,  1.0f, -1.5f)
+   };
+
+
+   GLuint VBO, VAO;
+
+   glGenBuffers(1, &VBO);
+   glGenVertexArrays(1, &VAO);
+
+   glBindVertexArray(VAO);
+   glBindBuffer(GL_ARRAY_BUFFER, VBO);
+
+   glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+   glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(GLfloat), (GLvoid*) 0);
+   glEnableVertexAttribArray(0);
+
+   glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(GLfloat), (GLvoid*) (3 * sizeof(GLfloat)));
+   glEnableVertexAttribArray(1);
+
+   glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+   glBindVertexArray(0);
+
+   GLuint texture, texture2;
+   int width, height;
+   glGenTextures(1, &texture);
+   glGenTextures(1, &texture2);
+
+   glBindTexture(GL_TEXTURE_2D, texture);
+   glTextureParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+   glTextureParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+   glTextureParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+   glTextureParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+   unsigned char *image = SOIL_load_image("/home/herain/Documents/opengl/Shader/texture/ti.png", &width, &height, 0, SOIL_LOAD_RGB);
+   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, image);
+   glGenerateMipmap(GL_TEXTURE_2D);
+   SOIL_free_image_data(image);
+
+   glBindTexture(GL_TEXTURE_2D, texture2);
+   glTextureParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+   glTextureParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+   glTextureParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+   glTextureParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+   unsigned char *image2 = SOIL_load_image("/home/herain/Documents/opengl/Shader/texture/container.jpg", &width, &height, 0, SOIL_LOAD_RGB);
+   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, image2);
+   glGenerateMipmap(GL_TEXTURE_2D);
+   SOIL_free_image_data(image2);
+
+   glBindTexture(GL_TEXTURE_2D, 0);
+
+   glEnable(GL_DEPTH_TEST);
+
+   while (!glfwWindowShouldClose(window)){
+       currentFrame = glfwGetTime();
+       deltaFrame = currentFrame - lastFrame;
+       lastFrame = currentFrame;
+       //为什么这里要计算一个delta时间？因为在不同机器上对一个图形的渲染速度是不同的，想象我们有两台机子，一台是现在顶尖配置一台是10年前最拉的配置，如果我们在两台机子上渲染同一个图像然后运动，第一台电脑渲染速度快，帧之间间隔小，那么单位时间内收到的运动指令就更多，相反，10年前电脑可能就受到几个指令，那么好电脑在观感上物体就运动更多，差的电脑运动的就更少
+       //但如果我们记录渲染需要的时间，乘以这个时间就能保证两个电脑上的物体运动速度一样（但后者帧率肯定惨不忍睹）
+       
+       glfwPollEvents();
+       pos_update();
+       glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
+       glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+       myShader.Use();
+
+
+
+       mat4 view = mat4(1.0f);
+       view = lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
+       //第一个函数时相机位置，第二个函数是目标位置，第三个函数是世界坐标的朝上方向，虽然这里写的意思像相机朝上方向，但实际上是世界坐标！
+
+       mat4 projection = mat4(1.0f);
+       projection = perspective(radians(fov), (float)WIDTH/(float)HEIGHT, 0.1f, 100.0f);
+
+       myShader.setMat4("view", view);
+       myShader.setMat4("projection", projection);
+
+       //glActiveTexture(GL_TEXTURE0);
+       glBindTexture(GL_TEXTURE_2D, texture);
+       //glUniform1i(glGetUniformLocation(myShader.Program, "ourTexture"), 0);
+
+       glActiveTexture(GL_TEXTURE1);
+       glBindTexture(GL_TEXTURE_2D, texture2);
+       glUniform1i(glGetUniformLocation(myShader.Program, "ourTexture2"), 1);
+
+       glBindVertexArray(VAO);
+       for(unsigned int i = 0; i < 10; i ++){
+           mat4 model = mat4(1.0f);
+           model = translate(model, cubePositions[i]);
+           float angle = 20.0f * i;
+           model = rotate(model, radians(angle), vec3(1.0f, 0.3f, 0.5f));
+           myShader.setMat4("model", model);
+
+           glDrawArrays(GL_TRIANGLES, 0, 36);
+       }
+       glBindVertexArray(0);
+
+       glfwSwapBuffers(window);
+   }
+   glDeleteVertexArrays(1, &VAO);
+   glDeleteBuffers(1, &VBO);
+
+   glfwTerminate();
+   return 0;
+}
+
+void key_callback(GLFWwindow *window, int key, int scancode, int action, int mode){
+
+   if (key == GLFW_KEY_ESCAPE && mode == GLFW_MOD_SHIFT && action == GLFW_PRESS)
+       glfwSetWindowShouldClose(window, GL_TRUE);
+
+   if(action == GLFW_PRESS){
+       keys[key] = true;
+   }  else if (action == GLFW_RELEASE){
+       keys[key] = false;
+   }
+}
+
+void pos_update(){
+   GLfloat cameraSpeed = 5.0f * deltaFrame;
+   if(keys[GLFW_KEY_W])
+       cameraPos += cameraSpeed * cameraFront;
+   if(keys[GLFW_KEY_S])
+       cameraPos -= cameraSpeed * cameraFront;
+   if(keys[GLFW_KEY_A])
+       cameraPos -= normalize(cross(cameraFront, cameraUp)) * cameraSpeed;
+   if(keys[GLFW_KEY_D])
+       cameraPos += normalize(cross(cameraFront, cameraUp)) * cameraSpeed;
+}
+
+void mouse_callback(GLFWwindow* window, double xpos, double ypos){
+   if(initMouse){
+       lastX = xpos;
+       lastY = ypos;
+       initMouse = false;
+   }
+
+    //下面我们要获取鼠标被移动了多少
+   GLfloat xOffset = xpos - lastX;
+   GLfloat yOffset = lastY - ypos;
+    //这里x，y的获取方法不同，原因是y坐标是从底部到顶部依次增大的
+   lastX = xpos;
+   lastY = ypos;
+
+   GLfloat h_sensitivity = 0.005f;
+   GLfloat v_sensitivity = 0.005f;
+   xOffset *= v_sensitivity;
+   yOffset *= h_sensitivity;
+    //这里我分开设置了x轴和y轴的速度，因为速度一致可能会导致一些人头晕
+
+   gYaw += xOffset;
+   gPitch += yOffset;
+
+   if(gPitch > 89.0f)
+       gPitch = 89.0f;
+   if(gPitch < -89.0f)
+       gPitch = -89.0f;
+
+   vec3 front;
+   front.x = cos(radians(gPitch)) * sin(-radians(gYaw));
+   front.y = sin(radians(gPitch));
+   front.z = cos(radians(gPitch)) * cos(-radians(gYaw));
+    //这里的操作涉及到三角形方面的知识，设斜边为h，那么我们可以求出对边为h*sin theta，临边为h*cos theta
+    //   |   
+    //   |  /|
+    //   | / | sin theta   
+    //   |/  |
+    // --+------------
+    //   cos theta
+    //然而就算了解这个知识，应用到实际还是比较难想象的，这里提供一个更直观的理解方法，首先先求pitch变换
+    //两手指尖朝前，左手在下右手在上合在一起，之前提到过我们把相机反转了180度，所以现在指尖朝向是-z轴
+    //绕x轴的顺时针运动是z，y，-z，-y，所以当我们接受一个正的pitch值时，就做顺时针运动，想象y轴从下往上穿过掌根，那么顺时针运动就是左手手掌向下分离（掌根紧贴），可以发现随着pitch值增加，实际角度也在增加所以根据三角知识，可以算出xyz的变化
+    //下面求yaw的变换
+    //两手指尖朝前，左手右手都在同一平面合在一起，绕y轴的顺时针运动是z，x，-z，-x，所以接收到一个正的yaw值时，左手不动右手分离（掌根紧贴），可以发现随着yaw值增加，实际角度实在减小的，所以带入运算时的角度要取反
+    cameraFront = normalize(front);
+    //我们只想要方向，所以标准化
+}
+
+void scrool_callback(GLFWwindow* window, double xoffset, double yoffset){
+   fov -= (float) yoffset;
+   if(fov < 1.0f)
+       fov = 1.0f;
+   if(fov > 45.0f)
+       fov = 45.0f;
+}
+```
+
