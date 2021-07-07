@@ -1,3 +1,5 @@
+# OpenGL第一章
+
 ## OpenGL
 
 OpenGL是一个API，由Khronos组织制定和维护，具体实现方法由显卡开发商自行实现。相比早期OpenGL使用的立即渲染模式（固定渲染管线），现在的OpenGL使用的是更为灵活的**核心模式**（core-profile）。
