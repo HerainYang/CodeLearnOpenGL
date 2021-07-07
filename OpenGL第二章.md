@@ -62,6 +62,10 @@ Normal = mat3(transpose(inverse(model))) * aNormal;
 //            转置矩阵   逆矩阵   模型矩阵
 ```
 
+关于矩阵的证明，这里给出网上找的一幅图，个人觉得解释的不错：
+
+![img](https://uploads.disquscdn.com/images/5666918ed573bb4810bd7af5200be6227d143c43c354c780c1591c5ef1487153.png)
+
 镜面光照
 
 所谓镜面光照其实就是**高光**（Specular Highlight），它的原理如图，结合生活常识应该不难理解：
