@@ -926,6 +926,7 @@ int main() {
     //最后一个是真正的图像数据
    glGenerateMipmap(GL_TEXTURE_2D);
     //因为之前没有加载多级渐远纹理，所以在生成纹理后，我们需要手动调用并生成，这会为当前绑定的纹理自动生成所有需要的多级渐远纹理
+    //请注意有个长得非常像的函数叫glGenerateTextureMipmap，两个函数的功能都是一样的，但是参数不同
    SOIL_free_image_data(image);
    glBindTexture(GL_TEXTURE_2D, 0);
 
@@ -991,7 +992,8 @@ out vec4 color;
 uniform sampler2D ourTexture;
 //sample被称为采样器，它以贴图的纹理类型作为后缀
 //采样器会和glDrawElements沟通，调用glDrawElements之后，它会把纹理赋值给采样器
-
+//sampler2D被称为不透明类型(Opaque Type)，这是一种不能被实例化的类型，我们只能通过uniform来定义它，如果不用uniform，GLSL会报错
+//不透明类型指的是那些内部形式没有被暴露出来的类型
 void main()
 {
     color = texture(ourTexture, TexCoord);
