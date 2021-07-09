@@ -398,3 +398,201 @@ void main(){
 
 应该不难看懂，就不解释了。
 
+## 光源
+
+如标题所示，这章我们会讨论三种光：**定向光**（Directional Light），**点光源**（Point Light），**聚光**（Spotlight）。
+
+### 定向光
+
+如果光源位置足够远，我们就可以假设它的每条光线是平行的，现实中的例子就是太阳。
+
+![img](https://learnopengl-cn.github.io/img/02/05/light_casters_directional.png)
+
+因为所有光线都平行，所以光源的位置就不重要了，因为对于场景中每一个物体，光的方向都是一致的，所以说代码里我们用光线方向来替代光源位置。
+
+```glsl
+struct Light {
+    // vec3 position; // 使用定向光就不再需要了
+    vec3 direction;
+
+    vec3 ambient;
+    vec3 diffuse;
+    vec3 specular;
+};
+...
+void main()
+{
+  vec3 lightDir = normalize(-light.direction);
+    //至于这里为什么要取反，请看之前计算漫反射的图
+  ...
+}
+```
+
+然后再在c++代码中设置direction就行了，对于direction的设计，可以用vec3也可以用vec4，正如之前提到过的四分量向量的第四个分量w，可以在glsl代码中检测，如果w为0就作为定向光处理，如果w为1就作为位置光处理。
+
+### 点光源
+
+点光源和位置光是特别像的，除了一点，衰减。
+
+之前的位置光无论物体放在哪里，光线的强度都一样，这样是不符合物理常理的，而**衰减**（Attenuation）是会让光照强度随着距离而减少的一种线性方程：
+$$
+F_{att}=\frac{1.0}{K_c+K_l*d+K_q*d^2}
+$$
+在这里d代表了片段距离光源的距离，而三个K则是我们为了计算衰减值的可配置数值：
+
+* 常数项$K_c$通常为1，它的作用是保证分母永远大于1.
+* 一次项以线性方式减少强度。
+* 二次项在近距离时影响较小，远距离影响更大。
+
+| 覆盖距离 | 常数项 | 一次项 | 二次项   |
+| :------- | :----- | :----- | :------- |
+| 7        | 1.0    | 0.7    | 1.8      |
+| 13       | 1.0    | 0.35   | 0.44     |
+| 20       | 1.0    | 0.22   | 0.20     |
+| 32       | 1.0    | 0.14   | 0.07     |
+| 50       | 1.0    | 0.09   | 0.032    |
+| 65       | 1.0    | 0.07   | 0.017    |
+| 100      | 1.0    | 0.045  | 0.0075   |
+| 160      | 1.0    | 0.027  | 0.0028   |
+| 200      | 1.0    | 0.022  | 0.0019   |
+| 325      | 1.0    | 0.014  | 0.0007   |
+| 600      | 1.0    | 0.007  | 0.0002   |
+| 3250     | 1.0    | 0.0014 | 0.000007 |
+
+代码很简单，只需要新加几个参数到结构体就行：
+
+```glsl
+struct Light {
+    vec3 position;  
+
+    vec3 ambient;
+    vec3 diffuse;
+    vec3 specular;
+
+    float constant;
+    float linear;
+    float quadratic;
+};
+    
+int main(){
+    ...
+    float distance    = length(light.position - FragPos);
+    float attenuation = 1.0 / (light.constant + light.linear * distance + light.quadratic * (distance * distance));
+    ambient  *= attenuation; 
+    diffuse  *= attenuation;
+    specular *= attenuation;
+}
+```
+
+### 聚光
+
+聚光时位于一个特定位置朝着特定方向照射的光线，可以想象成手电筒和路灯。
+
+在OpenGL中，聚光由一个世界坐标，一个方向和一个**切光角**（Cutoff Angle）来表示，切光角定义了圆锥的半径，对于每个片段，我们会计算它在不在切光方向之内。
+
+![img](https://learnopengl-cn.github.io/img/02/05/light_casters_spotlight_angles.png)
+
+* `LightDir`：从片段指向光源的向量。
+* `SpotDir`： 聚光指向的方向。
+* `Phi`$\phi$：切光角。
+* `Theta`$\theta$ ：LightDir和SportDir之间的夹角，如果在聚光范围内，这个角度应该要比$\phi$更小。
+
+```glsl
+#version 330 core
+
+in vec3 Normal;
+in vec3 FragPos;
+in vec2 myTex;
+
+out vec4 color;
+
+struct Material {
+ sampler2D diffuse;
+ sampler2D specular;
+ float shininess;
+};
+
+struct Light {
+ vec3 position;
+ vec3 direction;
+ float cutOff;
+
+ vec3 ambient;
+ vec3 diffuse;
+ vec3 specular;
+
+ float constant;
+ float linear;
+ float quadratic;
+};
+
+uniform vec3 viewPos;
+uniform Material material;
+uniform Light light;
+
+void main(){
+ vec3 lightDir = normalize(light.position - FragPos);
+ float theta = dot(lightDir, normalize(-light.direction));
+ vec3 ambient = light.ambient * vec3(texture(material.diffuse, myTex));
+ vec3 result;
+ if(theta > light.cutOff){
+     //唯一需要注意的一点，为什么这里是>号
+     //原因是我们在这里用的是cos，cos里，越接近1的数值，角度越小，如果对此有疑问请查看cos函数的图像
+     vec3 norm = normalize(Normal);
+     float diff = max(dot(norm, lightDir), 0.0);
+     vec3 diffuse = light.diffuse * diff * vec3(texture(material.diffuse, myTex));
+
+     vec3 viewDir = normalize(viewPos - FragPos);
+     vec3 reflectDir = reflect(-lightDir, norm);
+     float spec = pow(max(dot(viewDir, reflectDir), 0.0), material.shininess);
+     vec3 specular = light.specular * spec * vec3(texture(material.specular, myTex));
+
+     float distance    = length(light.position - FragPos);
+     float attenuation = 1.0 / (light.constant + light.linear * distance + light.quadratic * (distance * distance));
+
+     diffuse   *= attenuation;
+     specular *= attenuation;
+
+     result = ambient + diffuse + specular;
+ } else {
+     result = ambient;
+ }
+
+ color = vec4(result, 1.0);
+}
+```
+
+然而这样的效果还不够真实，主要原因光的边缘太硬了，真实的效果应该是越接近聚光方向的光强越大，约边缘光强越弱，这时候就要用到这个函数：
+$$
+I = \frac{\theta - \gamma}{\epsilon}
+$$
+这里$\epsilon=\phi-\gamma$，内圆锥和外圆锥的余弦值差，最后的结果是当前片段的聚光强度。
+
+| $\theta$ | $\theta$（角度） | $\phi$（内光切） | $\phi$（角度） | $\gamma$（外光切） | $\gamma$（角度） | $\epsilon$             | $I$                           |
+| :------- | :--------------- | :--------------- | :------------- | :----------------- | :--------------- | :--------------------- | :---------------------------- |
+| 0.87     | 30               | 0.91             | 25             | 0.82               | 35               | 0.91 - 0.82 = 0.09     | 0.87 - 0.82 / 0.09 = 0.56     |
+| 0.9      | 26               | 0.91             | 25             | 0.82               | 35               | 0.91 - 0.82 = 0.09     | 0.9 - 0.82 / 0.09 = 0.89      |
+| 0.97     | 14               | 0.91             | 25             | 0.82               | 35               | 0.91 - 0.82 = 0.09     | 0.97 - 0.82 / 0.09 = 1.67     |
+| 0.83     | 34               | 0.91             | 25             | 0.82               | 35               | 0.91 - 0.82 = 0.09     | 0.83 - 0.82 / 0.09 = 0.11     |
+| 0.64     | 50               | 0.91             | 25             | 0.82               | 35               | 0.91 - 0.82 = 0.09     | 0.64 - 0.82 / 0.09 = -2.0     |
+| 0.966    | 15               | 0.9978           | 12.5           | 0.953              | 17.5             | 0.966 - 0.953 = 0.0448 | 0.966 - 0.953 / 0.0448 = 0.29 |
+
+可以看到，越接近边缘，$I$越接近1，反之越大，最后给出代码，应该不难理解：
+
+```glsl
+    // spotlight (soft edges)
+    float theta = dot(lightDir, normalize(-light.direction)); 
+    float epsilon = (light.cutOff - light.outerCutOff);
+    float intensity = clamp((theta - light.outerCutOff) / epsilon, 0.0, 1.0);
+    diffuse  *= intensity;
+    specular *= intensity;
+    
+    // attenuation
+    float distance    = length(light.position - FragPos);
+    float attenuation = 1.0 / (light.constant + light.linear * distance + light.quadratic * (distance * distance));    
+    ambient  *= attenuation; 
+    diffuse   *= attenuation;
+    specular *= attenuation;  
+```
+
+本章的最后给出一个概念：投影纹理https://zhuanlan.zhihu.com/p/62096266，感兴趣的朋友可以深入了解一下，这个效果类似于投影灯。
