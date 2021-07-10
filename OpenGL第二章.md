@@ -94,7 +94,7 @@ vec3 result = (ambient + diffuse + specular) * objectColor;
 FragColor = vec4(result, 1.0);
 ```
 
-这章的最后再提一下Gouraud着色，Gouraud着色本质是再顶点着色器实现的冯氏着色，相比片段着色器来说，顶点着色器要处理的顶点要少很多，所以Gouraud着色会更加高效，但因为顶点少了，更多的地方要通过线性插值来计算光照颜色，这样处理的光照可以说是靠猜，就不够真实。
+这节的最后再提一下Gouraud着色，Gouraud着色本质是再顶点着色器实现的冯氏着色，相比片段着色器来说，顶点着色器要处理的顶点要少很多，所以Gouraud着色会更加高效，但因为顶点少了，更多的地方要通过线性插值来计算光照颜色，这样处理的光照可以说是靠猜，就不够真实。
 
 ###  材质
 
@@ -400,7 +400,7 @@ void main(){
 
 ## 光源
 
-如标题所示，这章我们会讨论三种光：**定向光**（Directional Light），**点光源**（Point Light），**聚光**（Spotlight）。
+如标题所示，这节我们会讨论三种光：**定向光**（Directional Light），**点光源**（Point Light），**聚光**（Spotlight）。
 
 ### 定向光
 
@@ -584,6 +584,7 @@ $$
     float theta = dot(lightDir, normalize(-light.direction)); 
     float epsilon = (light.cutOff - light.outerCutOff);
     float intensity = clamp((theta - light.outerCutOff) / epsilon, 0.0, 1.0);
+    //clamp 保证最后结果在0 - 1之间
     diffuse  *= intensity;
     specular *= intensity;
     
@@ -595,4 +596,181 @@ $$
     specular *= attenuation;  
 ```
 
-本章的最后给出一个概念：投影纹理https://zhuanlan.zhihu.com/p/62096266，感兴趣的朋友可以深入了解一下，这个效果类似于投影灯。
+## 多光源
+
+最后，我们把之前学过的几个光源封装成函数，这样就方便多光源的整合计算了。
+
+### 定向光
+
+结构体
+
+```glsl
+struct DirLight{
+    vec3 direction;
+    vec3 ambient;
+    vec3 diffuse;
+    vec3 specular;
+}
+```
+
+封装函数
+
+```glsl
+vec3 CalcDirLight(DirLight light, vec3 normal, vec3 viewDir)
+{
+    vec3 lightDir = normalize(-light.direction);
+    // 漫反射着色
+    float diff = max(dot(normal, lightDir), 0.0);
+    // 镜面光着色
+    vec3 reflectDir = reflect(-lightDir, normal);
+    float spec = pow(max(dot(viewDir, reflectDir), 0.0), material.shininess);
+    // 合并结果
+    vec3 ambient  = light.ambient  * vec3(texture(material.diffuse, TexCoords));
+    vec3 diffuse  = light.diffuse  * diff * vec3(texture(material.diffuse, TexCoords));
+    vec3 specular = light.specular * spec * vec3(texture(material.specular, TexCoords));
+    return (ambient + diffuse + specular);
+}
+```
+
+### 点光源
+
+结构体
+
+```glsl
+struct PointLight {
+    vec3 position;
+
+    float constant;
+    float linear;
+    float quadratic;
+
+    vec3 ambient;
+    vec3 diffuse;
+    vec3 specular;
+};  
+```
+
+封装函数
+
+```glsl
+vec3 CalcPointLight(PointLight light, vec3 normal, vec3 fragPos, vec3 viewDir)
+{
+    vec3 lightDir = normalize(light.position - fragPos);
+    // 漫反射着色
+    float diff = max(dot(normal, lightDir), 0.0);
+    // 镜面光着色
+    vec3 reflectDir = reflect(-lightDir, normal);
+    float spec = pow(max(dot(viewDir, reflectDir), 0.0), material.shininess);
+    // 衰减
+    float distance    = length(light.position - fragPos);
+    float attenuation = 1.0 / (light.constant + light.linear * distance + 
+                 light.quadratic * (distance * distance));    
+    // 合并结果
+    vec3 ambient  = light.ambient  * vec3(texture(material.diffuse, TexCoords));
+    vec3 diffuse  = light.diffuse  * diff * vec3(texture(material.diffuse, TexCoords));
+    vec3 specular = light.specular * spec * vec3(texture(material.specular, TexCoords));
+    ambient  *= attenuation;
+    diffuse  *= attenuation;
+    specular *= attenuation;
+    return (ambient + diffuse + specular);
+}
+```
+
+### 聚光
+
+结构体
+
+```glsl
+struct SpotLight {
+    vec3 position;
+    vec3 direction;
+    float cutOff;
+    float outerCutOff;
+  
+    float constant;
+    float linear;
+    float quadratic;
+  
+    vec3 ambient;
+    vec3 diffuse;
+    vec3 specular;       
+};
+```
+
+封装函数
+
+```glsl
+vec3 CalcSpotLight(SpotLight light, vec3 normal, vec3 fragPos, vec3 viewDir)
+{
+    vec3 lightDir = normalize(light.position - fragPos);
+    // diffuse shading
+    float diff = max(dot(normal, lightDir), 0.0);
+    // specular shading
+    vec3 reflectDir = reflect(-lightDir, normal);
+    float spec = pow(max(dot(viewDir, reflectDir), 0.0), material.shininess);
+    // attenuation
+    float distance = length(light.position - fragPos);
+    float attenuation = 1.0 / (light.constant + light.linear * distance + light.quadratic * (distance * distance));    
+    // spotlight intensity
+    float theta = dot(lightDir, normalize(-light.direction)); 
+    float epsilon = light.cutOff - light.outerCutOff;
+    float intensity = clamp((theta - light.outerCutOff) / epsilon, 0.0, 1.0);
+    // combine results
+    vec3 ambient = light.ambient * vec3(texture(material.diffuse, TexCoords));
+    vec3 diffuse = light.diffuse * diff * vec3(texture(material.diffuse, TexCoords));
+    vec3 specular = light.specular * spec * vec3(texture(material.specular, TexCoords));
+    ambient *= attenuation * intensity;
+    diffuse *= attenuation * intensity;
+    specular *= attenuation * intensity;
+    return (ambient + diffuse + specular);
+}
+```
+
+## 投影纹理
+
+本章最后补充一个知识点，投影纹理。
+
+投影纹理的效果就和现实中的投影仪一样，可以将图片映射到物体上。
+
+首先，我们以投影源位置为中心定义一个坐标系统，因为经过投影变换的点的范围是`[-1,1]`，所以要通过以下的变换将其转换成范围为`[0,1]`的UV坐标，变换矩阵如下：
+$$
+M=\left[
+\begin{array}{cccc}
+0.5 & 0   & 0   & 0.5 \\
+0   & 0.5 & 0   & 0.5 \\
+0   & 0   & 0.5 & 0.5 \\
+0   & 0   & 0   & 1
+\end{array}
+\right]PV
+$$
+其中P为透视矩阵，V为投影源的LookAt矩阵。
+
+想象一下不难解释为什么需要用到透视矩阵（实际上正交也可以，但是效果不真实），投影的几何体和摄像机的几何体都是锥体。
+
+![img](https://upload-images.jianshu.io/upload_images/2949750-eda51a2abcae9209.png?imageMogr2/auto-orient/strip|imageView2/2/w/566/format/webp)
+
+最后附上关键代码：
+
+```c++
+mat4 projScaleTran = mat4(1.0f);
+projScaleTran = translate(projScaleTran, vec3(0.5f));
+projScaleTran = scale(projScaleTran, vec3(0.5f));
+...
+while(...){
+    ...
+    mat4 m = projScaleTran * perspective(30.0f, 1.0f, 0.2f, 1000.0f) * camera.GetViewMatrix();
+    myShader.setMat4("projectorMatrix", m);
+    ...
+}
+```
+
+```glsl
+//vertex
+ ProjTexCoord = projectorMatrix * (model * vec4(position, 1.0f));
+ //要随着物体，物体空间变换到世界空间，所以这一步是必要的
+//fragment
+ vec4 projTexColor = vec4(0.0);
+ projTexColor = textureProj(material.projectorTex, ProjTexCoord);
+
+```
+
