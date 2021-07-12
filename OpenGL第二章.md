@@ -774,3 +774,365 @@ while(...){
 
 ```
 
+## Assimp
+
+在导入模型之前，我们先要了解一个模型导入库：**`Assimp`**。`Assimp`可以导入多种不同的模型格式，并将模型数据加载到它的通用数据结构中，加载完之后，我们就可以从这个数据结构中读取我们需要的数据了。
+
+> 一个模型通常包括多个网格，通常每个模型都由几个子模型、形状组合而成，每个单独的形状就是一个网格。网格是OpenGL中绘制物体所需的最小单位（顶点数据，索引，材质属性）。
+
+![img](https://learnopengl-cn.github.io/img/03/01/assimp_structure.png)
+
+* 和材质于网格一样，所有的场景、模型都包含在Scene对象中，Scene对象也包括了对根节点的引用。
+* 根节点可能包括一些列指向场景对象中存储的网格数据的索引`mMeshes`的子节点，`mMeshes`下存储了真正的Mesh对象。
+* 一个Mesh对象本身包括了渲染所需要的所有数据，包括顶点向量，法向量，纹理坐标，面和物体的材质。
+* 一个网格包含了多个面，一个面包含了组成物体的渲染图元（三角，方形，点）的顶点的索引，所以利用EBO来渲染非常简单。
+* 如上一条提到，网格是包括Material对象的，它包含了一些函数让我们能获取到物体的材质属性。
+
+## 网格
+
+正如上一节所说，网格代表的是单个可绘制的实体，回想一下网格需要的数据：一系列顶点，每个顶点拥有对应的的位置向量，法向量和纹理坐标向量。用于索引绘制的索引和纹理形式的材质数据。
+
+```c++
+//
+// Created by herain on 7/12/21.
+//
+
+#ifndef OPENGL_MESH_H
+#define OPENGL_MESH_H
+
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <string>
+#include <vector>
+#include "Shader.h"
+
+using namespace glm;
+using namespace std;
+
+struct Vertex{
+   vec3 Position;
+   vec3 Normal;
+   vec2 TexCoords;
+};
+
+struct Texture{
+   unsigned int id;
+   //这个id指的是以前我们用SOIL读取图片之后的返回值，即索引texture的值
+   string type;
+   //这个type会指明这个材质是漫反射还是镜面反射，之后这个会被用于命名
+   string path;
+};
+
+class Mesh{
+public:
+   //网格数据
+   vector<Vertex> vertices;
+   vector<unsigned int> indices;
+   vector<Texture> textures;
+   //函数
+   Mesh(vector<Vertex> vertices, vector<unsigned int> indices, vector<Texture> textures);
+   void Draw(Shader shader);
+
+private:
+   //渲染数据
+   unsigned int VAO, VBO, EBO;
+   //函数
+   void setupMesh();
+};
+
+Mesh::Mesh(vector<Vertex> vertices, vector<unsigned int> indices, vector<Texture> textures){
+   this->vertices = vertices;
+   this->indices = indices;
+   this->textures = textures;
+   setupMesh();
+}
+
+void Mesh::setupMesh() {
+   glGenVertexArrays(1, &VAO);
+   glGenBuffers(1, &VBO);
+   glGenBuffers(1, &EBO);
+
+   glBindVertexArray(VAO);
+   glBindBuffer(GL_ARRAY_BUFFER, VBO);
+   glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(Vertex), &vertices[0], GL_STATIC_DRAW);
+
+   glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
+   glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(unsigned int), &indices[0], GL_STATIC_DRAW);
+
+   glEnableVertexAttribArray(0);
+   glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*) 0);
+
+   glEnableVertexAttribArray(1);
+   glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*) offsetof(Vertex, Normal));
+
+   glEnableVertexAttribArray(2);
+   glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*) offsetof(Vertex, TexCoords));
+
+   glBindVertexArray(0);
+}
+
+void Mesh::Draw(Shader shader) {
+   unsigned int diffuseNr = 1;
+   unsigned int specularNr = 1;
+   for(unsigned int i = 0; i < textures.size(); i++){
+       glActiveTexture(GL_TEXTURE0 + i);
+       string number;
+       string name = textures[i].type;
+       if(name == "texture_diffuse")
+           number = to_string(diffuseNr++);
+       else if(name == "texture_specular")
+           number = to_string(specularNr++);
+
+       shader.setFloat(("material."+name+number).c_str(), i);
+       //每个漫反射纹理会被命名为texture_diffuseN，每个镜面反射纹理会被命名为texture_specularN
+       glBindTexture(GL_TEXTURE_2D, textures[i].id);
+       //将纹理数据传入到缓冲中，此时缓冲绑定着某个纹理
+   }
+   glActiveTexture(GL_TEXTURE0);
+
+   glBindVertexArray(VAO);
+   glDrawElements(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT, 0);
+   glBindVertexArray(0);
+}
+
+#endif //OPENGL_MESH_H
+```
+
+## 模型
+
+如之前所说，一个模型是由多个网格构成的，所以在模型类中，就一定会包含一个网格的vector。在这一节中，我们会学习如何将3D模型转换成Mesh对象。
+
+```c++
+#ifndef MODEL_H
+#define MODEL_H
+
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <stb/stb_image.h>
+#include <assimp/Importer.hpp>
+#include <assimp/scene.h>
+#include <assimp/postprocess.h>
+
+#include <string>
+#include <fstream>
+#include <sstream>
+#include <iostream>
+#include <map>
+#include <vector>
+#include "Mesh.h"
+
+using namespace std;
+
+unsigned int TextureFromFile(const char *path, const string &directory);
+
+class Model
+{
+public:
+   vector<Texture> textures_loaded;
+    //存储已经加载过的贴图，因为很多情况下同一张贴图会被用很多次，所以不重复加载贴图能在一定程度上提升性能
+   vector<Mesh>    meshes;
+   string directory;
+
+   Model(string const &path, bool gamma = false)
+   {
+       loadModel(path);
+   }
+
+   void Draw(Shader &shader)
+   {
+       for(unsigned int i = 0; i < meshes.size(); i++)
+           meshes[i].Draw(shader);
+   }
+    //渲染模型实际上就是把它下面的网格一个个都绘制好
+
+private:
+   void loadModel(string const &path)
+   {
+       Assimp::Importer importer;
+       const aiScene* scene = importer.ReadFile(path, aiProcess_Triangulate|aiProcess_GenSmoothNormals|aiProcess_FlipUVs);
+       //声明了一个加载器，用于加载模型，正如之前提到过，大部分信息都会存在scene里面
+       //aiProcess_Triangulate表示如果模型不是完全由三角形组成，就先把它们变成三角形
+       //aiProcess_GenSmoothNormals给所有顶点生成平滑的法线
+       //aiProcess_FlipUVs会反转贴图的y轴，因为OpenGL里面很多图像都是反的
+       //aiProcess_GenNormals如果模型不包含法线就为每个顶点创建法线
+       //aiProcess_SplitLargeMeshes将大的网格分成小网格
+       //aiProcess_OptimizeMeshes将小网格合并为大的网格，减少绘制调用次数
+       //更多的flags可以在这里找到：http://assimp.sourceforge.net/lib_html/postprocess_8h.html
+       if(!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
+       {
+           cout << "ERROR::ASSIMP:: " << importer.GetErrorString() << endl;
+           return;
+       }
+       //在这一步我们会检查场景和根节点有没有正确读取，以及用一个标记来检查数据完不完整
+
+       directory = path.substr(0, path.find_last_of('/'));
+       processNode(scene->mRootNode, scene);
+       //将根节点传入递归的函数一个个处理
+   }
+
+   void processNode(aiNode *node, const aiScene *scene)
+   {
+       for(unsigned int i = 0; i < node->mNumMeshes; i++)
+       {
+           aiMesh* mesh = scene->mMeshes[node->mMeshes[i]];
+           meshes.push_back(processMesh(mesh, scene));
+           //处理当前节点下的每一个网格，并把处理完的网格存储起来
+       }
+
+       for(unsigned int i = 0; i < node->mNumChildren; i++)
+       {
+           processNode(node->mChildren[i], scene);
+           //递归处理下面的节点
+       }
+
+   }
+
+    //下面是将aimesh对象转换成我们自己的网格对象，我们需要访问网格的相关属性并把它们对应放进我们的对象中
+   Mesh processMesh(aiMesh *mesh, const aiScene *scene)
+   {
+       vector<Vertex> vertices;
+       vector<unsigned int> indices;
+       vector<Texture> textures;
+
+       //对于网格下每一个节点，我们逐个处理
+       for(unsigned int i = 0; i < mesh->mNumVertices; i++)
+       {
+           Vertex vertex;
+           glm::vec3 vector;
+           
+           //将节点位置读取出来
+           vector.x = mesh->mVertices[i].x;
+           vector.y = mesh->mVertices[i].y;
+           vector.z = mesh->mVertices[i].z;
+           vertex.Position = vector;
+           
+           //如果有法线，就把法线数据读取出来
+           if (mesh->HasNormals())
+           {
+               vector.x = mesh->mNormals[i].x;
+               vector.y = mesh->mNormals[i].y;
+               vector.z = mesh->mNormals[i].z;
+               vertex.Normal = vector;
+           }
+           
+           //如果有纹理信息，就把纹理位置信息读取出来，在这里我们假设只会用到一组纹理位置，请不要搞混这里的纹理位置和纹理，纹理位置是描述了纹理应该怎么贴，纹理是描述了贴什么
+           if(mesh->mTextureCoords[0])
+           {
+               glm::vec2 vec;
+               vec.x = mesh->mTextureCoords[0][i].x;
+               vec.y = mesh->mTextureCoords[0][i].y;
+               vertex.TexCoords = vec;
+           }
+           else
+               vertex.TexCoords = glm::vec2(0.0f, 0.0f);
+           vertices.push_back(vertex);
+       }
+      
+       //在Assimp中，每一个面代表了一个图元，我们之前定义过，所以在这个示例中，图元永远是三角形
+       //一个面包括了多个索引，索引描述了我们绘制面的顺序，我们只需要把这些顺序存起来就行了
+       for(unsigned int i = 0; i < mesh->mNumFaces; i++)
+       {
+           aiFace face = mesh->mFaces[i];
+           for(unsigned int j = 0; j < face.mNumIndices; j++)
+               indices.push_back(face.mIndices[j]);
+       }
+       
+       //下面处理材质
+       aiMaterial* material = scene->mMaterials[mesh->mMaterialIndex];
+       //下面我们假设采样器的名字为texture_材质类型N
+       // diffuse: texture_diffuseN
+       // specular: texture_specularN
+       // normal: texture_normalN
+
+       //纹理的索引被存在mMaterials里，下面我们从mMaterials中读取对应的贴图
+       // 1. diffuse maps
+       vector<Texture> diffuseMaps = loadMaterialTextures(material, aiTextureType_DIFFUSE, "texture_diffuse");
+       textures.insert(textures.end(), diffuseMaps.begin(), diffuseMaps.end());
+       // 2. specular maps
+       vector<Texture> specularMaps = loadMaterialTextures(material, aiTextureType_SPECULAR, "texture_specular");
+       textures.insert(textures.end(), specularMaps.begin(), specularMaps.end());
+
+       return Mesh(vertices, indices, textures);
+       //返回网格信息
+   }
+
+   
+   vector<Texture> loadMaterialTextures(aiMaterial *mat, aiTextureType type, string typeName)
+   {
+       vector<Texture> textures;
+       for(unsigned int i = 0; i < mat->GetTextureCount(type); i++)
+       {
+           //这里GetTextureCount会检测储存在材质中纹理的数量
+           aiString str;
+           mat->GetTexture(type, i, &str);
+           //获取具体文件的位置
+           bool skip = false;
+           
+           //下面会在textures_loaded里面找有没有同样路径的贴图，如果有就代表已经加载过了
+           for(unsigned int j = 0; j < textures_loaded.size(); j++)
+           {
+               if(std::strcmp(textures_loaded[j].path.data(), str.C_Str()) == 0)
+               {
+                   textures.push_back(textures_loaded[j]);
+                   skip = true;
+                   break;
+               }
+           }
+           if(!skip)
+           {
+               //如果还没加载过则加载
+               Texture texture;
+               texture.id = TextureFromFile(str.C_Str(), this->directory);
+               texture.type = typeName;
+               texture.path = str.C_Str();
+               textures.push_back(texture);
+               textures_loaded.push_back(texture);
+           }
+       }
+       return textures;
+   }
+};
+
+
+unsigned int TextureFromFile(const char *path, const string &directory)
+{
+   string filename = string(path);
+   filename = directory + '/' + filename;
+
+   unsigned int textureID;
+   glGenTextures(1, &textureID);
+
+   int width, height, nrComponents;
+   unsigned char *data = stbi_load(filename.c_str(), &width, &height, &nrComponents, 0);
+   if (data)
+   {
+       GLenum format;
+       if (nrComponents == 1)
+           format = GL_RED;
+       else if (nrComponents == 3)
+           format = GL_RGB;
+       else if (nrComponents == 4)
+           format = GL_RGBA;
+
+       glBindTexture(GL_TEXTURE_2D, textureID);
+       glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
+       glGenerateMipmap(GL_TEXTURE_2D);
+
+       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+       stbi_image_free(data);
+   }
+   else
+   {
+       std::cout << "Texture failed to load at path: " << path << std::endl;
+       stbi_image_free(data);
+   }
+
+   return textureID;
+}
+#endif
+```
+
