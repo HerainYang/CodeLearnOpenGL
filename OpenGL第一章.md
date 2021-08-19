@@ -1857,6 +1857,7 @@ void pos_update(){
    if(keys[GLFW_KEY_D])
        cameraPos += normalize(cross(cameraFront, cameraUp)) * cameraSpeed;
 }
+//请注意这里为什么要把key事件分成两个函数来写，这是因为大多数事件输入系统一次只能处理一个输入，所以如果我们用key的监听函数来实现移动，我们的物体就不能同时往两个方向移动，分成两个函数为什么可以，看代码不难理解。
 
 void mouse_callback(GLFWwindow* window, double xpos, double ypos){
    if(initMouse){
